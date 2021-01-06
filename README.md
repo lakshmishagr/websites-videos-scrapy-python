@@ -28,6 +28,7 @@ In Database folder "Database.py" have db connection
 "Quieries.py" have db insert video details object
 
 Here im use strapi with mongo-db has backend, and broadcastersvideos has table name and respective fileds 
+
 {
    "video_title": title,
    "video_slug": slugify(title),
@@ -43,4 +44,5 @@ Here im use strapi with mongo-db has backend, and broadcastersvideos has table n
    "language": "english",
    "keywords": ' | '.join(map(str, modified_video_keywords))
 }
+
 broadcaster,videoformat,videokeywords are relational tables
