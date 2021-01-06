@@ -16,7 +16,9 @@ Basic Illustration:-
     3. output the data to a json file to cross check
 
 for single file crawl
+
 ex: scrapy crawl page_bgr
+
 inside Spiders folder all files are present, every file have class and here "name" value define file
 
 
