@@ -6,32 +6,35 @@ import os
 
 
 class Database:
-    """MongoDB database connection."""
+    """MongoDB connection manager."""
     
     _client: Optional[MongoClient] = None
     _db = None
     
     @classmethod
     def get_client(cls) -> MongoClient:
-        """Get MongoDB client instance."""
+        """Get MongoDB client with connection pooling."""
         if cls._client is None:
-            # Use environment variables for configuration
+            # Environment-based configuration
             host = os.getenv('MONGO_HOST', 'localhost')
             port = int(os.getenv('MONGO_PORT', '27017'))
             username = os.getenv('MONGO_USERNAME')
             password = os.getenv('MONGO_PASSWORD')
             auth_source = os.getenv('MONGO_AUTH_SOURCE', 'admin')
             
+            # Build connection string
             if username and password:
-                cls._client = MongoClient(
-                    host=host,
-                    port=port,
-                    username=username,
-                    password=password,
-                    authSource=auth_source
-                )
+                uri = f"mongodb://{username}:{password}@{host}:{port}/{auth_source}"
             else:
-                cls._client = MongoClient(host, port)
+                uri = f"mongodb://{host}:{port}"
+            
+            cls._client = MongoClient(
+                uri,
+                maxPoolSize=50,
+                minPoolSize=5,
+                maxIdleTimeMS=30000,
+                serverSelectionTimeoutMS=5000
+            )
         
         return cls._client
     

@@ -4,7 +4,6 @@ from typing import Generator, Optional
 from urllib.parse import urljoin, urlparse
 import scrapy
 import re
-
 from ..items import VideoItem
 
 
