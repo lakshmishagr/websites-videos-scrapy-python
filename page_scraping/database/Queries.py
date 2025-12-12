@@ -1,83 +1,54 @@
-"""Database queries for video scraping project."""
+"""Database operations for video scraping."""
 
-from __future__ import annotations
-from typing import Any, Dict, List
+from typing import Dict, Any, Optional
 import logging
+from datetime import datetime
 
-from ..database.Database import Database
+from .Database import Database
 import pymongo
-import requests
 from slugify import slugify
 
 
-class Queries:
-    """Database operations for video scraping."""
+class VideoRepository:
+    """Simplified video database operations."""
     
-    _db_collection = Database.db.broadcastersvideos
-    _db_collection_keywords = Database.db.video_keywords
-    logger = logging.getLogger(__name__)
-    
-    @classmethod
-    def insert_videos(cls, video_data: Dict[str, Any]) -> bool:
-        """Insert video data into database."""
-        try:
-            cls._db_collection.insert_one(video_data)
-            cls.logger.info(f"Video inserted: {video_data.get('video_title', 'Unknown')}")
-            return True
-        except pymongo.errors.DuplicateKeyError:
-            cls.logger.warning("Duplicate video encountered")
-            return False
-        except Exception as e:
-            cls.logger.error(f"Failed to insert video: {e}")
-            return False
-
-    @classmethod
-    def insert_keywords(cls, keywords: List[str]) -> List[str]:
-        """Insert keywords and return their IDs."""
-        keyword_ids = []
+    def __init__(self):
+        self.db = Database.get_database()
+        self.collection = self.db.videos
+        self.logger = logging.getLogger(__name__)
         
-        for keyword in keywords:
-            if not keyword.strip():
-                continue
-                
-            keyword_slug = slugify(keyword)
-            keyword_doc = {"name": keyword.strip(), "slug": keyword_slug}
+        # Create index for better performance
+        self.collection.create_index([('slug', 1)], unique=True, background=True)
+    
+    def save_video(self, video_data: Dict[str, Any]) -> bool:
+        """Save video to database."""
+        try:
+            # Add metadata
+            video_data['created_at'] = datetime.utcnow()
+            video_data['updated_at'] = datetime.utcnow()
             
-            try:
-                # Try to insert new keyword
-                result = cls._db_collection_keywords.insert_one(keyword_doc)
-                keyword_ids.append(str(result.inserted_id))
-                cls.logger.debug(f"Keyword inserted: {keyword}")
-            except pymongo.errors.DuplicateKeyError:
-                # Keyword exists, get its ID
-                try:
-                    existing = cls._db_collection_keywords.find_one({"slug": keyword_slug})
-                    if existing:
-                        keyword_ids.append(str(existing['_id']))
-                except Exception as e:
-                    cls.logger.error(f"Failed to find existing keyword {keyword}: {e}")
-            except Exception as e:
-                cls.logger.error(f"Failed to process keyword {keyword}: {e}")
-                
-        return keyword_ids
-
-    @classmethod
-    def insert_api(cls, video_data: Dict[str, Any]) -> requests.Response:
-        """Send video data to API endpoint."""
-        api_url = 'https://your-strapi-backend.com/broadcastersvideos'
-        
-        try:
-            response = requests.post(
-                api_url, 
-                json=video_data,  # Use json instead of data for better handling
-                timeout=30,
-                headers={'Content-Type': 'application/json'}
+            # Generate slug if not provided
+            if 'slug' not in video_data and 'title' in video_data:
+                video_data['slug'] = slugify(video_data['title'])
+            
+            # Use upsert to handle duplicates
+            result = self.collection.update_one(
+                {'slug': video_data['slug']},
+                {'$set': video_data},
+                upsert=True
             )
-            response.raise_for_status()
-            return response
-        except requests.exceptions.RequestException as e:
-            cls.logger.error(f"API request failed: {e}")
-            # Return a mock response object for error handling
-            mock_response = requests.Response()
-            mock_response.status_code = 500
-            return mock_response
+            
+            if result.upserted_id:
+                self.logger.info(f"New video saved: {video_data.get('title', 'Unknown')}")
+            else:
+                self.logger.info(f"Video updated: {video_data.get('title', 'Unknown')}")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to save video: {e}")
+            return False
+    
+    def video_exists(self, slug: str) -> bool:
+        """Check if video already exists."""
+        return self.collection.find_one({'slug': slug}) is not None
