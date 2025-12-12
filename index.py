@@ -127,5 +127,7 @@ if __name__ == "__main__":
     # # process.crawl(KannadaNews18)
     # # process.crawl(GujaratiNews18)
     # # process.crawl(BengaliNews18)
-    process.start()
 
+
+
+    process.start()

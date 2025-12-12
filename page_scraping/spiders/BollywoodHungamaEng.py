@@ -1,10 +1,8 @@
-from scrapy.loader import ItemLoader
-from  scrapy.selector import Selector
-from urllib.parse import urlparse
-import scrapy, re, json,sys, json, html, re
+import scrapy
 from slugify import slugify
 from ..database.Queries import Queries
 from subprocess import  check_output, CalledProcessError, STDOUT
+from ..items import VideoItem
 
 class BollywoodHungamaEng(scrapy.Spider):
     name="page_bollywoodhungamaeng"
@@ -19,107 +17,90 @@ class BollywoodHungamaEng(scrapy.Spider):
         'https://www.bollywoodhungama.com/videos/first-day-first-show/',
         ]
     user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2227.0 Safari/537.36"
+    
     def parse(self, response):
-        hxs = Selector(response)
-        link1 = hxs.xpath("//article[@class = 'bh-cm-box bh-box-article hentry']/figure/a/@href").extract()
-        link2 =hxs.xpath("//div[@class = 'video-list-box clearfix']/figure/a/@href").extract()
-        links=link1+link2
+        links = response.xpath(
+            "//article[contains(@class, 'bh-cm-box')]/figure/a/@href | "
+            "//div[contains(@class, 'video-list-box')]/figure/a/@href"
+        ).getall()
+        
         category = "entertainment"
-        print("Bollywood ENG Started")
-        print(len(links))
-        for link in links:
-            url = link
-            request = scrapy.Request(url, callback=self.parse_subpage)
-            request.meta['category'] = category
-            yield request
+        self.logger.info(f"Bollywood ENG Started. Found {len(links)} links on {response.url}")
 
+        for link in links:
+            yield scrapy.Request(
+                url=link, 
+                callback=self.parse_subpage,
+                meta={'category': category}
+            )
 
     def parse_subpage(self, response):
-        print("subvalues")
         try:
-            global video_url, duration, video_keywords, title, description, image, modified_video_keywords, modified_time, category
-            try:
-                video_url=response.xpath("//div/meta[@itemprop='contentURL']/@content").extract_first()
-                video_keywords=response.xpath("//meta[@name = 'keywords']/@content").extract_first()
-                title = response.xpath("//meta[@property = 'og:title']/@content").extract_first()
-                description = response.xpath("//meta[@property = 'og:description']/@content").extract_first()
-                image = response.xpath("//meta[@property = 'og:image']/@content").extract_first()
-                category = response.meta['category']
-                duration = None
-                print("\n",video_url)
-            except:
-                print("EXCEPTION HIT")
-            command = [
-                'ffprobe',
-                '-v',
-                'error',
-                '-show_entries',
-                'format=duration',
-                '-of',
-                'quiet',
-                'csv=p=0',
-                'default=noprint_wrappers=1:nokey=1',
-                video_url
-            ]
-            try:
-                if (duration == None):
-                    output = check_output(command, stderr=STDOUT).decode()
-                    print("\noutput", output)
-                    duration = round(float(output) / 60, 2)
-                    duration = str(duration).replace('.', ':')
-                    duration = '0:' + duration
-                    print("\ndur", duration)
-            except CalledProcessError as e:
-                output = e.output.decode()
+            video_url = response.xpath("//div/meta[@itemprop='contentURL']/@content").get()
+            if not video_url:
+                self.logger.warning(f"No video contentURL found on {response.url}")
+                return
 
-            try:
-                time = duration.split(':')
-                if (len(time[0]) < 2):
-                    time[0] = '0' + time[0]
-                if (len(time[1]) < 2):
-                    time[1] = '0' + time[1]
-                if (len(time[2]) < 2):
-                    time[2] = '0' + time[2]
-                modified_time = str(time[0] + ":" + time[1] + ":" + time[2])
+            title = response.xpath("//meta[@property = 'og:title']/@content").get()
+            description = response.xpath("//meta[@property = 'og:description']/@content").get()
+            image = response.xpath("//meta[@property = 'og:image']/@content").get()
+            video_keywords_str = response.xpath("//meta[@name = 'keywords']/@content").get('')
+            category = response.meta['category']
 
-            except:
-                print("ERROR")
+            # Get video duration using ffprobe
+            duration_seconds = self._get_video_duration(video_url)
+            if duration_seconds is None:
+                self.logger.error(f"Could not get duration for video: {video_url}")
+                return
+            
+            # Format duration to HH:MM:SS
+            m, s = divmod(duration_seconds, 60)
+            h, m = divmod(m, 60)
+            modified_time = f"{int(h):02d}:{int(m):02d}:{int(s):02d}"
 
-            modified_video_keywords = [x.strip() for x in video_keywords.split()]
+            modified_video_keywords = [kw.strip() for kw in video_keywords_str.split(',') if kw.strip()]
+            keywords_db_ids = Queries.insert_keywords(self, modified_video_keywords)
 
-            keywords = Queries.insert_keywords(self, modified_video_keywords)
-            insertObject = {
-                "video_title" : title,
-                "video_slug" : slugify(title),
-                "video_link" : video_url,
-                "video_description" : description,
-                "broadcaster" : "5edf39ec820f925d307ae315",   #Not yet changed
-                "videoformat" : "5ce4f7ffa5c038104cb76649",   #Not yet changed
-                "video_image" : image,
-                "videokeywords" : keywords,
-                "page_url": response.url,
-                "duration" : modified_time,
-                "category": category,
-                "language": "english",
-                "keywords": ' | '.join(map(str, modified_video_keywords))
-            }
-            if ((len(video_url) > 0 and len(image) > 0 and len(modified_time) == 8) and
-                    (video_url.endswith('.mp4') or video_url.endswith('.m3u8') or video_url.endswith('.m4v'))):
-                # print("aaa------------------aaaa")
-                # print(title)
-                # print(video_url)
-                # print(modified_time)
-                # print(image)
-                # print(category)
-                # print("english")
-                # # print(insertObject)
-                # print("bbb------------------bbb")
-                result = Queries.insert_api(self, insertObject)
+            item = VideoItem()
+            item['video_title'] = title
+            item['video_slug'] = slugify(title)
+            item['video_link'] = video_url
+            item['video_description'] = description
+            item['broadcaster'] = "5edf39ec820f925d307ae315"
+            item['videoformat'] = "5ce4f7ffa5c038104cb76649"
+            item['video_image'] = image
+            item['videokeywords'] = keywords_db_ids
+            item['page_url'] = response.url
+            item['duration'] = modified_time
+            item['category'] = category
+            item['language'] = "english"
+            item['keywords'] = ' | '.join(modified_video_keywords)
+
+            if all([video_url, image, title]) and video_url.endswith(('.mp4', '.m3u8', '.m4v')):
+                result = Queries.insert_api(self, dict(item))
                 if result.status_code == 200:
-                    print("INSERTED")
+                    self.logger.info(f"Successfully inserted video: {title}")
                 else:
-                    print(result.status_code)
-                    print(result.json())
+                    self.logger.error(f"API insert failed for {title} with status {result.status_code}: {result.text}")
+            else:
+                self.logger.warning(f"Skipping item due to missing data or invalid format: {title}")
 
         except Exception as err:
-            print("BollywoodEng error", err)
+            self.logger.error(f"Error processing subpage {response.url}: {err}")
+
+    def _get_video_duration(self, video_url):
+        """Runs ffprobe to get video duration in seconds."""
+        command = [
+            'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1', video_url
+        ]
+        try:
+            # Added text=True for automatic decoding
+            output = check_output(command, stderr=STDOUT, text=True)
+            return float(output.strip())
+        except (CalledProcessError, FileNotFoundError) as e:
+            self.logger.error(f"ffprobe error for {video_url}: {e}")
+            return None
+        except ValueError:
+            self.logger.error(f"ffprobe returned non-numeric duration for {video_url}")
+            return None
